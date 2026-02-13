@@ -82,6 +82,15 @@
 
 ---
 
+## 📷 Multimedia
+
+<img width="2048" height="1536" alt="image" src="https://github.com/user-attachments/assets/74b21103-0470-4a3c-a4ab-bed75f6053ae" />
+
+<img width="1536" height="2048" alt="image" src="https://github.com/user-attachments/assets/478a122b-14f5-4403-b42e-64884d01e513" />
+
+
+
+
 ## 🚀 Inicio Rápido
 
 ### Prerrequisitos
