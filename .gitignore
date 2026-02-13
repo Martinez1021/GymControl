@@ -1,0 +1,71 @@
+# ========================
+# Java / Maven
+# ========================
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# ========================
+# IDE - IntelliJ IDEA
+# ========================
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# ========================
+# IDE - Eclipse
+# ========================
+.classpath
+.project
+.settings/
+
+# ========================
+# IDE - VS Code
+# ========================
+.vscode/
+
+# ========================
+# IDE - NetBeans
+# ========================
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# ========================
+# OS Generated
+# ========================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ========================
+# H2 Database Files
+# ========================
+data/*.db
+data/*.trace.db
+
+# ========================
+# Logs
+# ========================
+*.log
+logs/
+
+# ========================
+# Maven Wrapper
+# ========================
+.mvn/
+
+# ========================
+# Environment / Secrets
+# ========================
+.env
+*.env
+application-local.properties
