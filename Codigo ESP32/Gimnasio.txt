@@ -1,0 +1,604 @@
+#include <SPI.h>
+#include <MFRC522.h>
+#include <WiFi.h>
+#include <HTTPClient.h> 
+#include <WebServer.h>
+#include "DHT.h"
+#include <Wire.h>
+#include <LiquidCrystal_PCF8574.h> 
+#include <Keypad.h>
+#include <ESP32Servo.h>
+
+const char* ssid = "proyectoDAM";
+const char* password = "20260108";
+const char* serverAddress = "http://192.168.1.247:8080"; 
+const char* esp2Address = "http://192.168.1.249";
+
+IPAddress staticIP(192, 168, 1, 248);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(192, 168, 1, 1);
+IPAddress secondaryDNS(8, 8, 8, 8);
+
+// ✅ PINES CORRECTOS SEGÚN MAPA DE CONEXIONES
+#define SS_PIN  5        // MFRC522 SDA/SS
+#define RST_PIN 13       // MFRC522 RST
+#define DHTPIN 17        // DHT11 DATA
+#define DHTTYPE DHT11    // Tipo de sensor
+#define LDRPIN 35        // Módulo LDR (DO - Digital Out)
+#define I2C_SDA 21       // LCD I2C SDA
+#define I2C_SCL 22       // LCD I2C SCL
+#define SERVO_PIN 14     // Servo Signal
+#define BUZZER_PIN 2     // Buzzer Signal
+
+// Nota: SPI usa pines por defecto del ESP32:
+// MISO = GPIO 19
+// MOSI = GPIO 23
+// SCK  = GPIO 18
+
+const char* SALA_ASIGNADA = "Gimnasio";
+
+// ✅ TECLADO 4x4 - PINES CORRECTOS
+const byte ROWS = 4, COLS = 4;
+
+char keys[ROWS][COLS] = {
+  {'D','C','B','A'},
+  {'#','9','6','3'},
+  {'0','8','5','2'},
+  {'*','7','4','1'}
+};
+
+byte rowPins[ROWS] = {25, 26, 4, 27};      // Filas: GPIO 25, 26, 4, 27
+byte colPins[COLS] = {33, 32, 3, 1};       // Columnas: GPIO 33, 32, 3(RX), 1(TX)
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+DHT dht(DHTPIN, DHTTYPE);
+LiquidCrystal_PCF8574 lcd(0x27);  // Dirección I2C típica: 0x27
+Servo servoMotor;
+WebServer server(80);
+
+unsigned long ultimaLecturaSensores = 0;
+const long intervaloSensores = 15000; 
+bool mostrandoMensajeRFID = false;
+
+String pinMaestro = "1234";
+String pinGimnasio = "5678";
+String pinYoga = "9012";
+String pinActual = "";
+int intentosFallidos = 0;
+unsigned long tiempoBloqueo = 0;
+bool sistemaBloqueado = false;
+bool modoPINactivo = false;
+
+float ultimaTemp = 0;
+float ultimaHum = 0;
+int ultimaLuz = 0;
+
+void beepCorto() {
+  tone(BUZZER_PIN, 2000, 100);
+  delay(120);
+}
+
+void beepError() {
+  for(int i = 0; i < 3; i++) {
+    tone(BUZZER_PIN, 1500, 150);
+    delay(250);
+  }
+}
+
+void abrirPuerta() {
+  servoMotor.write(90);
+  delay(3000);
+  servoMotor.write(0);
+}
+
+void abrirPuertaRemota() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  
+  String url = String(esp2Address) + "/abrir-puerta";
+  http.begin(url);
+  http.GET();
+  http.end();
+}
+
+bool enviarAccesoConSala(String uid, String sala) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  
+  HTTPClient http;
+  http.setConnectTimeout(15000); 
+  http.setTimeout(15000);
+  
+  String url = String(serverAddress) + "/api/rfid/sala";
+  
+  String json = "{";
+  json += "\"rfidTag\":\"" + uid + "\",";
+  json += "\"espIp\":\"" + WiFi.localIP().toString() + "\",";
+  json += "\"sala\":\"" + sala + "\"";
+  json += "}";
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  
+  int httpCode = http.POST(json);
+  bool resultado = (httpCode == 200);
+  
+  if (httpCode == 403 || httpCode == 400) {
+    String payload = http.getString();
+    
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    
+    if (payload.indexOf("Ya estas en sala") >= 0 || 
+        payload.indexOf("otra sala") >= 0) {
+      lcd.print("YA ESTAS EN");
+      lcd.setCursor(0, 1);
+      lcd.print("OTRA SALA!");
+    } else {
+      lcd.print("ACCESO DENEGADO");
+      lcd.setCursor(0, 1);
+      lcd.print("Contacta admin");
+    }
+    
+    beepError();
+    delay(3000);
+    resultado = false;
+  }
+  
+  http.end();
+  return resultado;
+}
+
+void handleGetSensores() {
+  String json = "{";
+  json += "\"temperatura\":" + String(ultimaTemp, 1) + ",";
+  json += "\"humedad\":" + String(ultimaHum, 1) + ",";
+  json += "\"luz\":" + String(ultimaLuz);
+  json += "}";
+  
+  server.send(200, "application/json", json);
+}
+
+void setup() {
+  delay(1000);
+
+  pinMode(LDRPIN, INPUT);      // Módulo LDR (salida digital)
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  servoMotor.attach(SERVO_PIN);
+  servoMotor.write(0);
+
+  Wire.begin(I2C_SDA, I2C_SCL);  // Iniciar I2C en GPIO 21 y 22
+  lcd.begin(16, 2);
+  lcd.setBacklight(255);
+  
+  lcd.clear();
+  lcd.print("Iniciando...");
+  lcd.setCursor(0, 1);
+  lcd.print("Sala: Gimnasio");
+
+  WiFi.begin(ssid, password);
+  WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS);
+
+  int intentos = 0;
+  while (WiFi.status() != WL_CONNECTED && intentos < 20) {
+    delay(500);
+    intentos++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    lcd.clear();
+    lcd.print("WiFi OK");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.localIP());
+    beepCorto();
+    delay(2000);
+  } else {
+    lcd.clear();
+    lcd.print("Error WiFi");
+    beepError();
+    delay(2000);
+  }
+
+  server.on("/sensores", handleGetSensores);
+  server.begin();
+
+  dht.begin();
+  SPI.begin();  // Inicia SPI en pines por defecto (18, 19, 23)
+  mfrc522.PCD_Init();
+  
+  lcd.clear();
+  beepCorto();
+}
+
+void loop() {
+  unsigned long tiempoActual = millis();
+  
+  server.handleClient();
+
+  if (sistemaBloqueado) {
+    if (tiempoActual - tiempoBloqueo < 60000) {
+      lcd.setCursor(0, 0);
+      lcd.print("BLOQUEADO       ");
+      lcd.setCursor(0, 1);
+      int segsRestantes = (60000 - (tiempoActual - tiempoBloqueo)) / 1000;
+      lcd.print("Espera ");
+      lcd.print(segsRestantes);
+      lcd.print("s   ");
+      delay(1000);
+      return;
+    } else {
+      sistemaBloqueado = false;
+      intentosFallidos = 0;
+      lcd.clear();
+      beepCorto();
+    }
+  }
+
+  char key = keypad.getKey();
+  if (key) {
+    beepCorto();
+    procesarTeclado(key);
+  }
+
+  if (!mostrandoMensajeRFID && !modoPINactivo &&
+      (tiempoActual - ultimaLecturaSensores >= intervaloSensores)) {
+    ultimaLecturaSensores = tiempoActual;
+    
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
+    int luz = digitalRead(LDRPIN);  // Lee módulo LDR (0=luz, 1=oscuro)
+    
+    if (!isnan(h) && !isnan(t)) {
+      ultimaTemp = t;
+      ultimaHum = h;
+      ultimaLuz = luz;
+      
+      lcd.setCursor(0, 0);
+      lcd.print("T:"); 
+      lcd.print(t, 1); 
+      lcd.print("C H:"); 
+      lcd.print(h, 0); 
+      lcd.print("%  "); 
+      
+      lcd.setCursor(0, 1);
+      if(luz == LOW) lcd.print("Luz:SI PIN:[A]  ");
+      else           lcd.print("Luz:NO PIN:[A]  ");
+
+      if(WiFi.status() == WL_CONNECTED) {
+        sendSensorData(t, h, luz);
+      }
+    }
+  }
+
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    beepCorto();
+    
+    if (modoPINactivo) {
+      modoPINactivo = false;
+      pinActual = "";
+    }
+    
+    mostrandoMensajeRFID = true;
+    
+    String uid = "";
+    for (byte i = 0; i < mfrc522.uid.size; i++) {
+       if(mfrc522.uid.uidByte[i] < 0x10) uid += "0";
+       uid += String(mfrc522.uid.uidByte[i], HEX);
+    }
+    uid.toUpperCase();
+
+    lcd.clear();
+    lcd.print("Verificando...");
+
+    if(WiFi.status() == WL_CONNECTED) {
+      checkAccess(uid);
+    } else {
+      lcd.clear();
+      lcd.print("Sin red");
+      beepError();
+    }
+
+    mfrc522.PICC_HaltA();
+    mfrc522.PCD_StopCrypto1();
+    
+    delay(2000);
+    mostrandoMensajeRFID = false;
+    lcd.clear();
+  }
+}
+
+void procesarTeclado(char key) {
+  if (key == 'A') {
+    modoPINactivo = true;
+    pinActual = "";
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN: 1234=Emerg");
+    lcd.setCursor(0, 1);
+    lcd.print("5678=Gim 9012=Yo");
+    delay(2000);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Introduce PIN:");
+    lcd.setCursor(0, 1);
+    
+  } else if (key == '*') {
+    if (modoPINactivo) {
+      modoPINactivo = false;
+      pinActual = "";
+      lcd.clear();
+      lcd.print("PIN cancelado");
+      delay(1000);
+      lcd.clear();
+    }
+    
+  } else if (key == '#') {
+    if (modoPINactivo && pinActual.length() > 0) {
+      verificarPIN();
+    }
+    
+  } else if (key >= '0' && key <= '9') {
+    if (modoPINactivo) {
+      pinActual += key;
+      
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+      lcd.setCursor(0, 1);
+      for (int i = 0; i < pinActual.length(); i++) {
+        lcd.print("*");
+      }
+      
+      if (pinActual.length() == 4) {
+        delay(300);
+        verificarPIN();
+      }
+    }
+  }
+}
+
+void verificarPIN() {
+  if (pinActual == pinMaestro) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN CORRECTO");
+    lcd.setCursor(0, 1);
+    lcd.print("Acceso Gimnasio");
+    
+    beepCorto();
+    delay(500);
+    beepCorto();
+    
+    intentosFallidos = 0;
+    
+    if (enviarAccesoConSala("PIN_EMERGENCY", "Gimnasio")) {
+      abrirPuerta();
+    }
+    
+    delay(2000);
+    lcd.clear();
+    
+  } else if (pinActual == pinGimnasio) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN GIMNASIO");
+    lcd.setCursor(0, 1);
+    lcd.print("Abriendo...");
+    
+    beepCorto();
+    delay(500);
+    beepCorto();
+    
+    intentosFallidos = 0;
+    
+    if (enviarAccesoConSala("PIN_GIMNASIO", "Gimnasio")) {
+      abrirPuerta();
+    }
+    
+    delay(2000);
+    lcd.clear();
+    
+  } else if (pinActual == pinYoga) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN YOGA");
+    lcd.setCursor(0, 1);
+    lcd.print("Abriendo remoto");
+    
+    beepCorto();
+    delay(500);
+    beepCorto();
+    
+    intentosFallidos = 0;
+    
+    if (enviarAccesoConSala("PIN_YOGA", "Yoga")) {
+      abrirPuertaRemota();
+    }
+    
+    delay(2000);
+    lcd.clear();
+    
+  } else {
+    intentosFallidos++;
+    
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN INCORRECTO");
+    lcd.setCursor(0, 1);
+    lcd.print("Intento ");
+    lcd.print(intentosFallidos);
+    lcd.print("/3");
+    
+    beepError();
+    
+    if (intentosFallidos >= 3) {
+      sistemaBloqueado = true;
+      tiempoBloqueo = millis();
+    }
+    
+    delay(2000);
+  }
+  
+  pinActual = "";
+  modoPINactivo = false;
+  lcd.clear();
+}
+
+void checkAccess(String uid) {
+  HTTPClient http;
+  http.setConnectTimeout(15000); 
+  http.setTimeout(15000);
+
+  String url = String(serverAddress) + "/api/rfid";
+  String json = "{\"rfidTag\":\"" + uid + "\", \"espIp\":\"" + WiFi.localIP().toString() + "\"}";
+
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  
+  int httpCode = http.POST(json);
+  
+  if (httpCode == 200) {
+    String payload = http.getString();
+    
+    if (payload.indexOf("\"accessGranted\":true") >= 0) {
+      String token = "\"cardHolder\":\"";
+      int start = payload.indexOf(token);
+      String InfoCompleta = "Socio";
+      
+      if (start != -1) {
+        start += token.length();
+        int end = payload.indexOf("\"", start);
+        if (end != -1) {
+          InfoCompleta = payload.substring(start, end);
+        }
+      }
+      
+      // Extraer sala actual si está en SALIDA
+      String salaActual = "";
+      int salaPos = payload.indexOf("\"salaActual\":\"");
+      if (salaPos != -1) {
+        salaPos += 14;
+        int fin = payload.indexOf("\"", salaPos);
+        salaActual = payload.substring(salaPos, fin);
+      }
+      
+      lcd.clear();
+      lcd.setCursor(0, 0);
+
+      if (InfoCompleta.indexOf("(ENTRADA)") >= 0) {
+         // Usuario quiere entrar
+         String nombre = InfoCompleta;
+         nombre.replace(" (ENTRADA)", "");
+         lcd.print("Hola " + nombre.substring(0, 11));
+         lcd.setCursor(0, 1);
+         lcd.print("Sala: Gimnasio");
+         
+         beepCorto();
+         delay(2000);
+         
+         // Intentar registrar entrada
+         if (enviarAccesoConSala(uid, SALA_ASIGNADA)) {
+           abrirPuerta();
+         }
+         
+         lcd.clear();
+         
+      } else if (InfoCompleta.indexOf("(SALIDA") >= 0) {
+         // Usuario quiere salir
+         
+         // Verificar si está intentando salir por su sala
+         if (salaActual.length() > 0 && !salaActual.equals(SALA_ASIGNADA)) {
+           lcd.print("ESTAS EN:");
+           lcd.setCursor(0, 1);
+           lcd.print(salaActual);
+           beepError();
+           delay(3000);
+           lcd.clear();
+           return;
+         }
+         
+         int parentesis = InfoCompleta.indexOf("(");
+         String nombre = InfoCompleta.substring(0, parentesis);
+         String tiempo = InfoCompleta.substring(parentesis);
+         tiempo.replace("(SALIDA: ", "");
+         tiempo.replace(")", "");
+         
+         if (tiempo == "SALIDA") tiempo = "";
+         
+         lcd.print("Adios " + nombre.substring(0, 10));
+         lcd.setCursor(0, 1);
+         if (tiempo.length() > 0) lcd.print("Tiempo: " + tiempo);
+         else lcd.print("<< SALIENDO <<");
+         
+         beepCorto();
+         delay(500);
+         beepCorto();
+         
+         // Registrar salida
+         if (enviarAccesoConSala(uid, SALA_ASIGNADA)) {
+           abrirPuerta();
+         }
+         
+         delay(2000);
+         lcd.clear();
+      }
+      else {
+         lcd.print("Bienvenido");
+         lcd.setCursor(0, 1);
+         lcd.print("Sala: Gimnasio");
+         beepCorto();
+         delay(2000);
+         
+         if (enviarAccesoConSala(uid, SALA_ASIGNADA)) {
+           abrirPuerta();
+         }
+         
+         lcd.clear();
+      }
+      
+    } else {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("ACCESO DENEGADO");
+      beepError();
+      delay(2000);
+      lcd.clear();
+    }
+  } else {
+    lcd.clear();
+    lcd.print("Error API: " + String(httpCode));
+    beepError();
+    delay(2000);
+    lcd.clear();
+  }
+  
+  http.end();
+}
+
+void sendSensorData(float temp, float hum, int ldrStatus) {
+  HTTPClient http;
+  http.setConnectTimeout(15000); 
+  http.setTimeout(15000);
+  
+  String url = String(serverAddress) + "/api/sensors";
+  float lux = (ldrStatus == LOW) ? 800.0 : 50.0;
+  
+  String json = "{";
+  json += "\"temperatura\":" + String(temp, 1) + ",";
+  json += "\"humedad\":" + String(hum, 1) + ",";
+  json += "\"luminosidad\":" + String(lux, 1) + ",";
+  json += "\"batteryVoltage\":3.3,";
+  json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  json += "\"uptime\":" + String(millis()/1000) + ",";
+  json += "\"status\":\"OK\"";
+  json += "}";
+
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.POST(json);
+  http.end();
+}
