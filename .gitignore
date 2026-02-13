@@ -51,6 +51,8 @@ Desktop.ini
 # ========================
 data/*.db
 data/*.trace.db
+api/data/*.db
+api/data/*.trace.db
 
 # ========================
 # Logs

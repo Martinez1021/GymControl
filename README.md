@@ -97,9 +97,11 @@ git clone https://github.com/tu-usuario/sensor-api.git
 cd sensor-api
 ```
 
-### 2. Compilar y ejecutar
+### 2. Compilar y ejecutar la API
 
 ```bash
+cd api
+
 # Compilar el proyecto
 mvn clean install
 
@@ -276,7 +278,7 @@ GPIO 16  ───►   Keypad Col 4       ┘
 
 ### Configurar el ESP32
 
-1. Abre `ESP32_Example.ino` en el **Arduino IDE**
+1. Abre `firmware/ESP32_Example.ino` en el **Arduino IDE**
 2. Configura tu red WiFi y la IP del servidor:
    ```cpp
    const char* ssid = "TU_RED_WIFI";
@@ -297,31 +299,35 @@ GPIO 16  ───►   Keypad Col 4       ┘
 
 ```
 sensor-api/
-├── src/
-│   └── main/
-│       ├── java/com/iot/sensors/
-│       │   ├── SensorApiApplication.java       # Punto de entrada
-│       │   ├── controller/
-│       │   │   ├── RfidRecordController.java   # Endpoints RFID + Usuarios
-│       │   │   └── SensorDataController.java   # Endpoints Sensores
-│       │   ├── dto/
-│       │   │   └── RoomAccessRequest.java       # DTO acceso por sala
-│       │   ├── model/
-│       │   │   ├── GymUser.java                 # Entidad Socio
-│       │   │   ├── RfidRecord.java              # Entidad Registro RFID
-│       │   │   └── SensorData.java              # Entidad Datos Sensor
-│       │   ├── repository/
-│       │   │   ├── GymUserRepository.java       # Repo Socios
-│       │   │   ├── RfidRecordRepository.java    # Repo RFID
-│       │   │   └── SensorDataRepository.java    # Repo Sensores
-│       │   └── service/
-│       │       ├── RfidRecordService.java       # Lógica acceso + salas
-│       │       └── SensorDataService.java       # Lógica sensores
-│       └── resources/
-│           └── application.properties           # Configuración
-├── ESP32_Example.ino                            # Firmware ESP32
-├── data/                                        # Base de datos H2
-├── pom.xml                                      # Dependencias Maven
+├── api/                                         # 🖥️ Backend Spring Boot
+│   ├── src/
+│   │   └── main/
+│   │       ├── java/com/iot/sensors/
+│   │       │   ├── SensorApiApplication.java       # Punto de entrada
+│   │       │   ├── controller/
+│   │       │   │   ├── RfidRecordController.java   # Endpoints RFID + Usuarios
+│   │       │   │   └── SensorDataController.java   # Endpoints Sensores
+│   │       │   ├── dto/
+│   │       │   │   └── RoomAccessRequest.java       # DTO acceso por sala
+│   │       │   ├── model/
+│   │       │   │   ├── GymUser.java                 # Entidad Socio
+│   │       │   │   ├── RfidRecord.java              # Entidad Registro RFID
+│   │       │   │   └── SensorData.java              # Entidad Datos Sensor
+│   │       │   ├── repository/
+│   │       │   │   ├── GymUserRepository.java       # Repo Socios
+│   │       │   │   ├── RfidRecordRepository.java    # Repo RFID
+│   │       │   │   └── SensorDataRepository.java    # Repo Sensores
+│   │       │   └── service/
+│   │       │       ├── RfidRecordService.java       # Lógica acceso + salas
+│   │       │       └── SensorDataService.java       # Lógica sensores
+│   │       └── resources/
+│   │           └── application.properties           # Configuración
+│   ├── data/                                        # Base de datos H2
+│   └── pom.xml                                      # Dependencias Maven
+│
+├── firmware/                                    # 🔌 Firmware ESP32
+│   └── ESP32_Example.ino                           # Código Arduino
+│
 ├── .gitignore
 ├── LICENSE
 └── README.md
