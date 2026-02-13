@@ -10,6 +10,7 @@
 
 <p align="center">
   <b>Sistema de control de acceso y monitorización ambiental para gimnasios, basado en IoT con ESP32 y API REST en Spring Boot.</b>
+  <b> HEXHO POR : Ernesto Martínez, Claudio Pastor, Alex Torres y Jorge Castera</b>
 </p>
 
 <p align="center">
