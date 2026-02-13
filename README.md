@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
 </p>
 
-<h1 align="center">🏋️ IoT Gym Access Control — Sensor API</h1>
+<h1 align="center">🏋️ IoT Gym Access Control</h1>
 
 <p align="center">
   <b>Sistema de control de acceso y monitorización ambiental para gimnasios, basado en IoT con ESP32 y API REST en Spring Boot.</b>
